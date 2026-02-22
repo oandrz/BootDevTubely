@@ -1,10 +1,12 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -43,21 +45,15 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	file, header, err := r.FormFile("thumbnail")
+	thumbnailMultiPartFile, header, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
 
-	defer file.Close()
+	defer thumbnailMultiPartFile.Close()
 
 	mediaType := header.Header.Get("Content-Type")
-
-	imageBytes, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to read image bytes", err)
-		return
-	}
 
 	videoMetadata, err := cfg.db.GetVideo(videoID)
 	if err != nil {
@@ -70,11 +66,26 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	base64EncodedImage := base64.StdEncoding.EncodeToString(imageBytes)
+	parts := strings.Split(mediaType, "/")
+	ext := parts[len(parts)-1]
+	fileName := fmt.Sprintf("%s.%s", videoID, ext)
+	filePath := filepath.Join(cfg.assetsRoot, fileName)
 
-	// save in db (base64) thumbnail url
-	thumbnailUrl := fmt.Sprintf("data:%s;base64,%s", mediaType, base64EncodedImage)
+	file, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create thumbnail file", err)
+		return
+	}
+	defer file.Close()
 
+	_, err = io.Copy(file, thumbnailMultiPartFile)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't write thumbnail file", err)
+		return
+	}
+
+	thumbnailUrl := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
+	fmt.Println("thumbnail url:", thumbnailUrl)
 	videoMetadata.ThumbnailURL = &thumbnailUrl
 
 	err = cfg.db.UpdateVideo(videoMetadata)
@@ -83,5 +94,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, videoMetadata)
+	updatedVideo, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get updated video", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, updatedVideo)
 }
