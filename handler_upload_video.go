@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/video"
 	"github.com/google/uuid"
 )
 
@@ -69,7 +71,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	defer os.Remove("tubely-upload.mp4")
+	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
 	_, err = io.Copy(tempFile, file)
@@ -94,8 +96,25 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspectRatio, err := video.GetVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get video aspect ratio", err)
+		return
+	}
+	log.Printf("Video aspect ratio: %s", aspectRatio)
+
+	var screenType string
+	switch aspectRatio {
+	case "16:9":
+		screenType = "landscape"
+	case "9:16":
+		screenType = "portrait"
+	default:
+		screenType = "square"
+	}
+
 	encodedFileName := base64.RawURLEncoding.EncodeToString(randBytes)
-	fullFileName := fmt.Sprintf("%s.%s", encodedFileName, ext)
+	fullFileName := fmt.Sprintf("%s/%s.%s", screenType, encodedFileName, ext)
 
 	s3InputParam := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
