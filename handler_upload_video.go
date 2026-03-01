@@ -19,17 +19,22 @@ import (
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
+	// used for if someone try upload more than 1GB then it will stop reading and return error
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<30)
 
 	defer r.Body.Close()
 
+	// getting the video id based on the path value of upload endpoint
 	videoIDString := r.PathValue("videoID")
+
+	// get the uuid of the video id string
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid ID", err)
 		return
 	}
 
+	// authorization
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT", err)
@@ -42,6 +47,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// get the video metadata saved when user created in tubely
 	videoMetadata, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't get video metadata", err)
@@ -52,6 +58,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// extract uploaded video from http request when client submit for with input name "video"
 	file, header, err := r.FormFile("video")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
@@ -59,6 +66,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 	defer file.Close()
 
+	//get the extension file of the uploaded file
 	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if mediaType != "video/mp4" {
 		respondWithError(w, http.StatusBadRequest, "Invalid video format", nil)
@@ -74,12 +82,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
+	//  Copies the uploaded video bytes from the in-memory stream (file) into the temp file on disk. After this, tempFile contains the full video.
 	_, err = io.Copy(tempFile, file)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't write video file", err)
 		return
 	}
 
+	// moves cursor that at the end of the file into start of the file
 	_, err = tempFile.Seek(0, io.SeekStart)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't write video file", err)
@@ -95,6 +105,20 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't generate random file name", err)
 		return
 	}
+
+	processedFilePath, err := video.ProcessVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't process video", err)
+		return
+	}
+	defer os.Remove(processedFilePath)
+
+	processedFile, err := os.Open(processedFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't open processed video file", err)
+		return
+	}
+	defer processedFile.Close()
 
 	aspectRatio, err := video.GetVideoAspectRatio(tempFile.Name())
 	if err != nil {
@@ -119,7 +143,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	s3InputParam := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &fullFileName,
-		Body:        tempFile,
+		Body:        processedFile,
 		ContentType: &mediaType,
 	}
 	_, err = cfg.s3Client.PutObject(context.Background(), &s3InputParam)
