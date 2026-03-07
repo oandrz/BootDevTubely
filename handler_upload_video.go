@@ -152,18 +152,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	//videoUrl := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, fullFileName)
-	videoUrl := fmt.Sprintf("%s,%s", cfg.s3Bucket, fullFileName)
+	videoUrl := fmt.Sprintf("%s/%s", cfg.s3CfDistribution, fullFileName)
 	videoMetadata.VideoURL = &videoUrl
 
 	err = cfg.db.UpdateVideo(videoMetadata)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video metadata", err)
 		return
-	}
-
-	_, err = cfg.dbVideoToSignedVideo(videoMetadata)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't convert video url to signed url", err)
 	}
 }
